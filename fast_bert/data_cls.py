@@ -4,6 +4,8 @@ import torch
 from pathlib import Path
 import pickle
 import logging
+import scipy
+import random
 
 import shutil
 
@@ -284,7 +286,205 @@ class MultiLabelTextProcessor(TextProcessor):
                                                           label=_get_labels(row, label_col)), axis=1))
 
 
-class BertDataBunch(object):
+class DaughterDataSet(Dataset):
+    
+    """ will pair up files and iterate according to batch size: """
+    
+    def __init__(self, de_sparse_file_path, en_sent_file_path, transform = None):
+
+        self.de_sparse_file_path = de_sparse_file_path
+        self.en_sent_file_path = en_sent_file_path
+        with open(self.en_sent_file_path,'rb') as infile:
+            self.en_sent_file = pickle.load(infile)
+        self.de_sent = scipy.sparse.load_npz(self.de_sparse_file_path).tocoo()
+        self.de_sent_dense = self.de_sent.todense()
+        self.examples = []
+        for i in range(len(self.de_sent_dense)):
+            self.examples.append(InputExample(guid=i,text_a=self.en_sent_file[i],
+                                                label=self.de_sent_dense[i]))
+
+        features = convert_examples_to_features(
+                self.examples,
+                label_list=self.labels,
+                max_seq_length=self.max_seq_length,
+                tokenizer=self.tokenizer,
+                output_mode=self.output_mode,
+                # xlnet has a cls token at the end
+                cls_token_at_end=bool(self.model_type in ['xlnet']),
+                cls_token=self.tokenizer.cls_token,
+                sep_token=self.tokenizer.sep_token,
+                cls_token_segment_id=2 if self.model_type in ['xlnet'] else 0,
+                # pad on the left for xlnet
+                pad_on_left=bool(self.model_type in ['xlnet']),
+                pad_token_segment_id=4 if self.model_type in ['xlnet'] else 0,
+                logger=self.logger)
+
+        # Convert to Tensors and build dataset
+        all_input_ids = torch.tensor(
+            [f.input_ids for f in features], dtype=torch.long)
+        all_input_mask = torch.tensor(
+            [f.input_mask for f in features], dtype=torch.long)
+        all_segment_ids = torch.tensor(
+            [f.segment_ids for f in features], dtype=torch.long)
+
+        if is_test == False:  # labels not available for test set
+            if self.multi_label:
+                all_label_ids = torch.tensor(
+                    [f.label_id for f in features], dtype=torch.float)
+            else:
+                all_label_ids = torch.tensor(
+                    [f.label_id for f in features], dtype=torch.long)
+
+            dataset = TensorDataset(
+                all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
+        else:
+            all_label_ids = []
+            dataset = TensorDataset(
+                all_input_ids, all_input_mask, all_segment_ids)
+
+        self.dataset = dataset
+        
+        
+    def __len__(self):
+        
+        return len(self.en_sent_file)
+    
+    def __getitem__(self, idx):
+        
+        return self.dataset[idx]
+
+class MegaDataSet(Dataset):
+    
+    """ Will make other Data Loaders i.e. One Data Loader per file."""
+    
+
+    def __init__(self, de_sparse_file_folder_path, en_sent_file_folder_path, data_dir, label_dir, tokenizer, train_indices, val_indices, test_data=None,
+                 label_file='labels.csv', label_col='label', batch_size_per_gpu=16, max_seq_length=512,
+                 multi_gpu=True, multi_label=False, set_type = 'train', model_type='bert', logger=None)
+        
+        
+        self.tokenizer = tokenizer
+        self.data_dir = data_dir
+        self.train_file = train_file
+        self.val_file = val_file
+        self.test_data = test_data
+        self.cache_dir = data_dir/'cache'
+        self.max_seq_length = max_seq_length
+        self.batch_size_per_gpu = batch_size_per_gpu
+        self.set_type = set_type
+
+        self.train_indices = train_indices
+        self.val_indices = val_indices
+        self.test_indices = None 
+
+        self.multi_label = multi_label
+        self.n_gpu = 1
+        
+        self.model_type = model_type
+        self.output_mode = 'classification'
+        if logger is None:
+            logger = logging.getLogger()
+        self.logger = logger
+        if multi_gpu:
+            self.n_gpu = torch.cuda.device_count()
+
+        if multi_label:
+            processor = MultiLabelTextProcessor(data_dir, label_dir)
+        else:
+            processor = TextProcessor(data_dir, label_dir)
+
+        self.labels = processor.get_labels(label_file)
+        
+        self.de_file_template = 'en_wmt_train_file_{}.pkl'
+        self.en_file_template = 'sparse_de_wmt_train_file_{}.npz'
+        
+        self.de_sparse_file_folder_path = de_sparse_file_folder_path
+        self.en_sent_file_folder_path = en_sent_file_folder_path
+        
+        self.de_file_template = os.path.join(de_sparse_file_folder_path, self.de_file_template)
+        self.en_file_template = os.path.join(en_sent_file_folder_path, self.en_file_template)
+        
+        #Shuffling the order of data files
+        self.num_files = os.listdir(self.de_sparse_file_folder_path)
+        if(self.set_type == 'train'):
+            self.indices = self.train_indices
+        elif(self.set_type == 'dev'):
+            self.indices = self.test_in
+        
+        random.shuffle(self.indices)
+        
+    def __len__(self):
+        
+        #Will give the number of files in the folder        
+        return len(self.num_files)
+    
+    def __getitem__(self, idx):
+        
+        #Effectively Choosing the random index
+        actual_idx = self.indices[idx]
+        de_file_path = self.de_file_template.format(actual_idx)
+        en_file_path = self.en_file_template.fotmat(actual_idx)
+
+        # self.de_sparse_file_path = de_sparse_file_path
+        # self.en_sent_file_path = en_sent_file_path
+        with open(en_file_path,'rb') as infile:
+            self.en_sent_file = pickle.load(infile)
+        self.de_sent = scipy.sparse.load_npz(self.de_sparse_file_path).tocoo()
+        self.de_sent_dense = self.de_sent.todense()
+        self.examples = []
+        for i in range(len(self.de_sent_dense)):
+            self.examples.append(InputExample(guid=i,text_a=self.en_sent_file[i],
+                                                label=self.de_sent_dense[i]))
+
+        microDataSet = self.get_dataset_from_examples(self.examples, self.set_type, is_test=False, no_cache=False)
+        return microDataset
+      
+    def get_dataset_from_examples(self, examples, set_type='train', is_test=False, no_cache=False):
+        
+        # Create tokenized and numericalized features
+        features = convert_examples_to_features(
+            examples,
+            label_list=self.labels,
+            max_seq_length=self.max_seq_length,
+            tokenizer=self.tokenizer,
+            output_mode=self.output_mode,
+            # xlnet has a cls token at the end
+            cls_token_at_end=bool(self.model_type in ['xlnet']),
+            cls_token=self.tokenizer.cls_token,
+            sep_token=self.tokenizer.sep_token,
+            cls_token_segment_id=2 if self.model_type in ['xlnet'] else 0,
+            # pad on the left for xlnet
+            pad_on_left=bool(self.model_type in ['xlnet']),
+            pad_token_segment_id=4 if self.model_type in ['xlnet'] else 0,
+            logger=self.logger)
+
+        # Convert to Tensors and build dataset
+        all_input_ids = torch.tensor(
+            [f.input_ids for f in features], dtype=torch.long)
+        all_input_mask = torch.tensor(
+            [f.input_mask for f in features], dtype=torch.long)
+        all_segment_ids = torch.tensor(
+            [f.segment_ids for f in features], dtype=torch.long)
+
+        if is_test == False:  # labels not available for test set
+            if self.multi_label:
+                all_label_ids = torch.tensor(
+                    [f.label_id for f in features], dtype=torch.float)
+            else:
+                all_label_ids = torch.tensor(
+                    [f.label_id for f in features], dtype=torch.long)
+
+            dataset = TensorDataset(
+                all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
+        else:
+            all_label_ids = []
+            dataset = TensorDataset(
+                all_input_ids, all_input_mask, all_segment_ids)
+
+        return dataset
+
+
+ class BertDataBunch(object):
 
     def __init__(self, data_dir, label_dir, tokenizer, train_file='train.csv', val_file='val.csv', test_data=None,
                  label_file='labels.csv', text_col='text', label_col='label', batch_size_per_gpu=16, max_seq_length=512,
@@ -487,4 +687,90 @@ class BertDataBunch(object):
             dataset = TensorDataset(
                 all_input_ids, all_input_mask, all_segment_ids)
 
-        return dataset
+        return dataset   
+
+class BertDataBunch(object):
+
+    def __init__(self, de_sparse_file_folder_path, en_sent_file_folder_path, data_dir, label_dir, tokenizer, train_file='train_indices.pkl', val_file='val_indices.pkl', test_data=None,
+                 label_file='labels.csv', label_col='label', batch_size_per_gpu=16, max_seq_length=512,
+                 multi_gpu=True, multi_label=False, backend="nccl", model_type='bert', logger=None):
+
+        # just in case someone passes string instead of Path
+        if isinstance(data_dir, str):
+            data_dir = Path(data_dir)
+
+        if isinstance(label_dir, str):
+            label_dir = Path(label_dir)
+
+        if isinstance(tokenizer, str):
+            _, _, tokenizer_class = MODEL_CLASSES[model_type]
+            # instantiate the new tokeniser object using the tokeniser name
+            tokenizer = tokenizer_class.from_pretrained(
+                tokenizer, do_lower_case=('uncased' in tokenizer))
+
+        self.tokenizer = tokenizer
+        self.data_dir = data_dir
+        self.train_file = train_file
+        self.val_file = val_file
+        self.test_data = test_data
+        self.cache_dir = data_dir/'cache'
+        self.max_seq_length = max_seq_length
+        self.batch_size_per_gpu = batch_size_per_gpu
+
+        self.train_dl = None
+        self.val_dl = None
+        self.test_dl = None
+
+        self.train_indices = None
+        self.val_indices = None
+        self.test_indices = None 
+
+        self.multi_label = multi_label
+        self.n_gpu = 1
+        
+        self.model_type = model_type
+        self.output_mode = 'classification'
+        if logger is None:
+            logger = logging.getLogger()
+        self.logger = logger
+        if multi_gpu:
+            self.n_gpu = torch.cuda.device_count()
+
+        if multi_label:
+            processor = MultiLabelTextProcessor(data_dir, label_dir)
+        else:
+            processor = TextProcessor(data_dir, label_dir)
+
+        self.labels = processor.get_labels(label_file)
+
+        if train_file:
+            # Train DataLoader
+            train_examples = None
+            
+            with open(self.train_file,'rb') as infile:
+                self.train_indices =  pickle.load(infile)
+
+            trainMegaDatset = MegaDataset(de_sparse_file_folder_path, en_sent_file_folder_path, self.data_dir, self.label_dir, self.tokenizer, self.train_indices, self.val_indices, self.test_data=None,
+                 self.label_file='labels.csv', self.label_col='label', self.batch_size_per_gpu=16,self.max_seq_length=512,
+                 multi_gpu=True, multi_label=False, set_type = 'train' self.model_type='bert', self.logger=None)
+        
+            self.train_dl = DataLoader(
+                trainMegaDatset, batch_size=1)
+
+        if val_file:
+            # Validation DataLoader
+            val_examples = None
+            
+            with open(self.val_file,'rb') as infile:
+                self.train_indices =  pickle.load(infile)
+
+            valMegaDatset = MegaDataset(de_sparse_file_folder_path, en_sent_file_folder_path, self.data_dir, self.label_dir, self.tokenizer, self.train_indices, self.val_indices, self.test_data=None,
+                 self.label_file='labels.csv', self.label_col='label', self.batch_size_per_gpu=16,self.max_seq_length=512,
+                 multi_gpu=True, multi_label=False, set_type = 'dev' self.model_type='bert', self.logger=None)
+        
+            self.val_dl = DataLoader(
+                valMegaDatset, batch_size=1)
+
+        
+
+    
