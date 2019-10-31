@@ -352,7 +352,7 @@ class MegaDataSet(Dataset):
     def __len__(self):
         
         #Will give the number of files in the folder        
-        return len(self.num_files)
+        return len(self.indices)
     
     def __getitem__(self, idx):
         
@@ -513,7 +513,7 @@ class BertDataBunch(object):
                  multi_gpu, self.multi_label, set_type, self.model_type, logger=None)
 
             self.val_dl = DataLoader(
-                valMegaDatset, batch_size=1)
+                valMegaDatset, batch_size=1, collate_fn = custom_collate_func)
 
         
 

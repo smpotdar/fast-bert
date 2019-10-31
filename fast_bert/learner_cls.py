@@ -211,17 +211,15 @@ class BertLearner(Learner):
         for epoch in pbar:
             epoch_step = 0
             epoch_loss = 0.0
-            start = time.time()
-            start1 = time.time()
+            # start = time.time()
+            # start1 = time.time()
             for step1, batch1 in enumerate(progress_bar(train_dataloader, parent=pbar)):
-                stop1 = time.time()
+                #stop1 = time.time()
+                print("In Training Loop")
+                break
                 microDataSet = batch1[0]
                 batch_size = 128
-
-                
                 microDataLoader = DataLoader(microDataSet, batch_size = batch_size)
-                
-
                 for step, batch in enumerate(microDataLoader):
                     print("Step: {}/{}.".format(step,len(microDataSet)/batch_size))
                     self.model.train()
@@ -276,9 +274,9 @@ class BertLearner(Learner):
                             
                             logging_loss = tr_loss
                 
-                stop = time.time()
-                print("%For making dataloader:",(((stop1 - start1)*100)/(stop - start)))
-                input()
+                # stop = time.time()
+                # print("%For making dataloader:",(((stop1 - start1)*100)/(stop - start)))
+                # input()
             # Evaluate the model after every epoch
             if validate:
                 results = self.validate()
@@ -299,7 +297,7 @@ class BertLearner(Learner):
         self.logger.info("Running evaluation")
         
         self.logger.info("  Num examples = %d", len(self.data.val_dl.dataset))
-        self.logger.info("  Batch size = %d", self.data.val_batch_size)
+        #self.logger.info("  Batch size = %d", self.data.val_batch_size)
         
         all_logits = None
         all_labels = None
@@ -314,45 +312,51 @@ class BertLearner(Learner):
         
         validation_scores = {metric['name']: 0. for metric in self.metrics}
         
-        for step, batch in enumerate(progress_bar(self.data.val_dl)):
-            self.model.eval()
-            batch = tuple(t.to(self.device) for t in batch)
-            
-            with torch.no_grad():
-                inputs = {'input_ids':      batch[0],
-                          'attention_mask': batch[1],
-                          'labels':         batch[3]}
+        for step1, batch1 in enumerate(progress_bar(self.data.val_dl)):
+            print("In Validation Loop")
+            microDataSet = batch1[0]
+            batch_size = 128
+            microDataLoader = DataLoader(microDataSet, batch_size = batch_size)
+            for step, batch in enumerate(microDataLoader):
+                print("Step: {}/{}.".format(step,len(microDataSet)/batch_size))
+                self.model.eval()
+                batch = tuple(t.to(self.device) for t in batch)
                 
-                if self.model_type in ['bert', 'xlnet']:
-                    inputs['token_type_ids'] = batch[2]
+                with torch.no_grad():
+                    inputs = {'input_ids':      batch[0],
+                            'attention_mask': batch[1],
+                            'labels':         batch[3]}
                     
-                outputs = self.model(**inputs)
-                tmp_eval_loss, logits = outputs[:2]
-            
+                    if self.model_type in ['bert', 'xlnet']:
+                        inputs['token_type_ids'] = batch[2]
+                        
+                    outputs = self.model(**inputs)
+                    tmp_eval_loss, logits = outputs[:2]
                 
-                eval_loss += tmp_eval_loss.mean().item()
-            
-            nb_eval_steps += 1
-            nb_eval_examples += inputs['input_ids'].size(0)
+                    
+                    eval_loss += tmp_eval_loss.mean().item()
                 
-            
-            if all_logits is None:
-                all_logits = logits
-            else:
-                all_logits = torch.cat((all_logits, logits), 0)
+                nb_eval_steps += 1
+                nb_eval_examples += inputs['input_ids'].size(0)
+                    
+                
+                if all_logits is None:
+                    all_logits = logits
+                else:
+                    all_logits = torch.cat((all_logits, logits), 0)
 
-            if all_labels is None:
-                all_labels = inputs['labels']
-            else:   
-                all_labels =  torch.cat((all_labels, inputs['labels']), 0)
-            
- 
-            if preds is None:
-                preds = logits.detach().cpu().numpy()
-                out_label_ids = inputs['labels'].detach().cpu().numpy()
-            else:
-                preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
-                out_label_ids = np.append(out_label_ids, inputs['labels'].detach().cpu().numpy(), axis=0)
+                if all_labels is None:
+                    all_labels = inputs['labels']
+                else:   
+                    all_labels =  torch.cat((all_labels, inputs['labels']), 0)
+                
+    
+                if preds is None:
+                    preds = logits.detach().cpu().numpy()
+                    out_label_ids = inputs['labels'].detach().cpu().numpy()
+                else:
+                    preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
+                    out_label_ids = np.append(out_label_ids, inputs['labels'].detach().cpu().numpy(), axis=0)
         
         eval_loss = eval_loss / nb_eval_steps
         
