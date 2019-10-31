@@ -370,13 +370,8 @@ class MegaDataSet(Dataset):
         
         self.examples = []
 
-        for i in range(len(self.de_sent_dense)):
-            # print("Type: ", type(self.examples))
-            # print("Example: ", self.de_sent_dense[i].tolist())
-            # input()
-            # self.examples.append(InputExample(guid=i,text_a=self.en_sent_file[i],
-            #                                     label=self.de_sent_dense[i]))
-            print(i)
+        #for i in range(len(self.de_sent_dense)):
+        for i in range(1024):
             self.examples.append(InputExample(guid=i,text_a=self.en_sent_file[i],
                                                 label=self.de_sent_dense[i].tolist()))
 
@@ -484,9 +479,9 @@ class BertDataBunch(object):
         #     processor = TextProcessor(data_dir, label_dir)
         # print("Processors Made")
 
-        # self.labels = processor.get_labels(label_file)
+        self.labels = [i for i in range(100000)]
 
-        print("Got Labels")
+        #print("Got Labels")
 
         if train_file:
             # Train DataLoader
